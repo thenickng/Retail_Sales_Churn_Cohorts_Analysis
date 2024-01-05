@@ -1,0 +1,214 @@
+---
+title: "Problem Set 8"
+output: html_document
+date: "2023-11-17"
+---
+
+# Churn Analysis
+
+```{r}
+library(tidyverse)
+retail <- read.csv("online_retail.csv")
+
+
+unique_customers <- length(unique(retail$CustomerID))
+unique_countries <- length(unique(retail$Country))
+revenue_by_country <- retail %>% 
+  group_by(Country) %>%
+  summarise(total_revenue = sum(UnitPrice*Quantity))
+avg_revenue_by_customer_country <- retail %>%
+  group_by(Country) %>%
+  summarise(total_revenue = sum(UnitPrice*Quantity), n_customers = n_distinct(CustomerID), average_revenue = sum(UnitPrice*Quantity)/n_distinct(CustomerID))
+
+```
+
+# Total Number of Customers
+
+```{r}
+cat("Total number of unique customers:", unique_customers)
+
+```
+
+# Total Number of Countries
+```{r}
+cat("Total number of Countries:", unique_countries)
+
+```
+
+# Total Revenue by Country
+
+```{r}
+revenue_by_country %>%
+  arrange(desc(total_revenue))
+
+```
+
+# Average Revenue By Customer in each Countryr
+
+```{r}
+avg_revenue_by_customer_country %>% 
+  arrange(desc(average_revenue))
+  
+
+```
+
+
+```{r}
+
+revenue_by_customer <- retail %>% 
+  filter(!is.na(CustomerID)) %>% 
+  group_by(CustomerID) %>% 
+  summarise(total_revenue = sum(UnitPrice * Quantity, na.rm=TRUE)) %>% 
+  ungroup()
+
+ggplot(data = revenue_by_customer) + 
+  geom_histogram(
+    aes(x = case_when(
+      total_revenue <= quantile(total_revenue, .01) ~ quantile(total_revenue, .01),
+      total_revenue >= quantile(total_revenue, .99) ~ quantile(total_revenue, .99), 
+      TRUE ~ total_revenue
+    )),
+    binwidth = 100
+  ) + 
+  scale_x_continuous(expand = c(0,0)) + 
+  scale_y_continuous(expand = c(0,0)) +
+  labs(x = 'Total Revenue',
+       y = 'Customers',
+       title = 'Distribution of Total Revenue by Customer',
+       subtitle = 'Winsorized at the 1st and 99th Percentiles') + 
+  theme_bw()
+
+```
+
+# What Percentage of Customers Account for 80% of Revenue?
+
+```{r}
+eighty_perc <- retail %>% 
+  group_by(CustomerID) %>%
+  summarise(revenue = sum(UnitPrice*Quantity), .groups = "drop") %>% 
+  arrange(desc(revenue)) %>%
+  mutate(cumsum = cumsum(revenue)) %>%
+  ungroup() %>%
+  filter(cumsum <= sum(revenue)*0.8) %>%
+  summarise(number = n()) %>%
+  pull(number)
+
+cat("Approximately ", eighty_perc*100/nrow(retail), "% of the customers account for 80% of the total revenue \n")
+
+```
+
+# Churn Analysis (Churn = 3 months)
+
+```{r}
+retail$InvoiceDate <- as.Date(retail$InvoiceDate, format = "%m/%d/%Y %H:%M")
+churn_raw <- retail %>% 
+  filter(!is.na(CustomerID), Quantity > 0) %>% 
+  distinct(CustomerID, InvoiceDate) %>% 
+  arrange(CustomerID, InvoiceDate) %>% 
+  group_by(CustomerID) %>% 
+  mutate(
+    time_to_next_order = difftime(
+      lead(InvoiceDate, default = max(retail$InvoiceDate)), 
+      InvoiceDate, 
+      units = 'days'
+    ),
+    churn_order = time_to_next_order >= 90, 
+    last_order = row_number() == max(row_number())
+  ) %>% 
+  ungroup()
+head(churn_raw)
+
+
+```
+
+# Returns
+
+```{r}
+
+retail %>% 
+  group_by(InvoiceNo) %>% 
+  summarise(returns = sum(Quantity < 0)/n()) %>%
+  ungroup() %>% 
+  group_by(returns) %>% 
+  summarise(n_orders = n_distinct(InvoiceNo)) %>% 
+  ungroup() %>% 
+  mutate(perc = n_orders/sum(n_orders))
+
+```
+
+# Fraction of Total Revenue Returned
+
+```{r}
+retail %>%
+  mutate(return = Quantity < 0) %>%
+  group_by(return) %>% 
+  summarise(
+    total_rev = sum(Quantity * UnitPrice, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(
+    perc = abs(total_rev/sum(total_rev*(!return))))
+
+```
+
+# Average number of Sales Daily
+
+```{r}
+retail <- retail %>% 
+  mutate(date = as.Date(InvoiceDate, format = "%m/%d/%Y"))
+retail_sales <- retail %>% 
+  mutate(month = month(InvoiceDate, label = TRUE),
+         year = year(date)) %>%
+  filter(Quantity > 0)
+
+daily_sales <- retail_sales %>%
+  group_by(date) %>%
+  summarise(sales = n())
+
+ggplot(data = daily_sales, aes(x = date, y = sales)) + 
+  geom_line()
+  
+monthly_sales <- retail_sales %>%
+  group_by(month) %>%
+  summarise(sales = n())
+
+ggplot(data = monthly_sales, aes(x = month, y = sales)) + 
+  geom_bar(stat = "identity")
+
+annual_sales <- retail_sales %>%
+  group_by(year) %>%
+  summarise(sales = n())
+
+ggplot(data = annual_sales, aes(x = year, y = sales)) + 
+  geom_bar(stat = "identity")
+```
+
+
+# Cohorts
+
+```{r}
+cohorts <- retail %>% 
+  group_by(CustomerID) %>%
+  mutate(
+    earliest_date = min(InvoiceDate, na.rm = TRUE),
+    cohort = format(earliest_date, "%m-%Y")
+  )
+
+head(cohorts)
+```
+
+```{r}
+cohorts_returns <- cohorts %>% filter(Quantity < 0)
+
+
+result_summary <- cohorts %>% 
+  group_by(cohort) %>%
+  summarise(
+    number_of_orders = n(),
+    size_of_orders = sum(UnitPrice * Quantity),
+    number_of_returns = sum(Quantity < 0),
+    size_of_returns = -sum(UnitPrice * Quantity * (Quantity < 0))
+)
+
+
+result_summary
+```
